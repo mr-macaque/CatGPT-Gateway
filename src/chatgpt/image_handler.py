@@ -38,21 +38,23 @@ async def detect_images_in_response(page: Page) -> list[dict]:
 
     ChatGPT DALL-E image responses do NOT use data-message-author-role.
     Instead, images appear inside an article turn with:
-    - img[alt="Generated image"]
+    - img[alt="Generated image"] or numbered variants (e.g. "Generated image 3")
     - div[id^="image-"] containers
     - src from chatgpt.com/backend-api/estuary/content
 
-    Returns a list of dicts: [{url, alt, title}, ...] or empty list.
+    Returns a list containing only the last matching image, or an empty list.
     """
-    result = await page.evaluate("""
+    result = await page.evaluate(r"""
         () => {
             const turns = document.querySelectorAll('section[data-testid^="conversation-turn-"]');
             if (turns.length === 0) return [];
 
             const lastTurn = turns[turns.length - 1];
 
-            // Find generated images — primary: alt="Generated image"
-            let images = lastTurn.querySelectorAll('img[alt="Generated image"]');
+            // Match "Generated image" and "Generated image N" (N is a number).
+            let images = [...lastTurn.querySelectorAll('img[alt]')].filter(
+                img => /^Generated image(?: \d+)?$/.test(img.alt)
+            );
 
             // Fallback: images inside imagegen containers
             if (images.length === 0) {
@@ -86,14 +88,11 @@ async def detect_images_in_response(page: Page) -> list[dict]:
 
             if (!images || images.length === 0) return [];
 
-            // Deduplicate by src URL
-            const seen = new Set();
-            const results = [];
-
-            for (const img of images) {
-                const src = img.src || '';
-                if (!src || seen.has(src)) continue;
-                seen.add(src);
+            // Return only the last image with a usable URL (DOM order).
+            const img = [...images].reverse().find(img => img.src);
+            if (!img) return [];
+            {
+                const src = img.src;
 
                 const alt = img.alt || '';
 
@@ -124,10 +123,8 @@ async def detect_images_in_response(page: Page) -> list[dict]:
                     }
                 }
 
-                results.push({ url: src, alt, title });
+                return [{ url: src, alt, title }];
             }
-
-            return results;
         }
     """)
 

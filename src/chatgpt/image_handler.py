@@ -47,14 +47,17 @@ async def detect_images_in_response(page: Page) -> list[dict]:
     result = await page.evaluate(r"""
         () => {
             const turns = document.querySelectorAll('section[data-testid^="conversation-turn-"]');
-            if (turns.length === 0) return [];
-
-            const lastTurn = turns[turns.length - 1];
+            // ChatGPT's image-generation UI can render outside the classic
+            // conversation-turn section, so fall back to the generated-image
+            // preview component used by the current UI.
+            const lastTurn = turns.length
+                ? turns[turns.length - 1]
+                : document;
 
             // Match "Generated image" and "Generated image N" (N is a number).
-            let images = [...lastTurn.querySelectorAll('img[alt]')].filter(
-                img => /^Generated image(?: \d+)?$/.test(img.alt)
-            );
+            let images = [...lastTurn.querySelectorAll(
+                'img[alt^="Generated image"], [data-testid="generated-image-preview"] img'
+            )].filter(img => /^Generated image(?: \d+)?$/.test(img.alt));
 
             // Fallback: images inside imagegen containers
             if (images.length === 0) {
@@ -88,8 +91,12 @@ async def detect_images_in_response(page: Page) -> list[dict]:
 
             if (!images || images.length === 0) return [];
 
-            // Return only the last image with a usable URL (DOM order).
-            const img = [...images].reverse().find(img => img.src);
+            // Generated-image previews currently use blob: URLs, not the
+            // backend-api URLs used by older ChatGPT image responses. The
+            // blob remains fetchable from the page context while it is alive.
+            const img = [...images].reverse().find(img =>
+                img.currentSrc || img.src || img.getAttribute('src')
+            );
             if (!img) return [];
             {
                 const src = img.src;
